@@ -12,7 +12,13 @@ Guidance for AI coding agents (and humans) working in this repository.
    look real; use obvious placeholders like `YOUR_API_KEY` or `x@y.z`.
    - Load secrets from environment variables or CLI flags only.
    - Do not write secrets to logs, reports, committed JSON output, or the README.
-   - The anonymized survey report must never contain IP addresses or credentials.
+   - The anonymized aggregate survey report (`--survey-report`) must never contain IP
+     addresses or credentials. Other survey outputs (`--jsonl`, `--json`, `--html`,
+     `--md`, `--csv`, `--xlsx`) may include host IPs **only as a /16 prefix** — the last
+     two octets redacted (e.g. `203.0.x.x`) — which is the default census masking. A full
+     four-octet IP must never appear in any report by default; it is emitted only when the
+     operator explicitly passes `--no-mask-ips`, which produces a non-anonymized report
+     that must not be shared (the report labels itself as such).
 
 2. **Static analysis must be clean.** Before considering a change complete, run
    Semgrep and ensure there are **no findings at MEDIUM, HIGH, or CRITICAL severity**:

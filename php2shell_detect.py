@@ -459,12 +459,18 @@ def _mask_ipv4_text(s):
 
 def mask_record(rec):
     """Partially anonymize a record in place for census mode: mask the IP everywhere it
-    can appear (target, resolved_ip, final_url, error strings, evidence detail) and drop
-    the reverse-DNS name, so shared --jsonl/--json census output never carries a full IP."""
+    can appear (target, resolved_ip, final_url, proxy, detail text, error strings, evidence
+    detail) and drop the reverse-DNS name, so shared census output (--jsonl/--json and the
+    --html/--md/--csv/--xlsx survey reports) never carries a full four-octet IP. Remote-
+    influenced free-text (proxy Via, verdict/detail strings) is scrubbed too, so a server
+    advertising an IP-shaped banner cannot smuggle a literal address into a shared report."""
     rec["target"] = mask_ip(rec.get("target"))
     rec["resolved_ip"] = mask_ip(rec.get("resolved_ip"))
     rec["host_header"] = None  # reverse-DNS name would defeat the masking
     rec["final_url"] = _mask_ipv4_text(rec.get("final_url"))
+    rec["proxy"] = _mask_ipv4_text(rec.get("proxy"))  # a Via header can carry a literal IP
+    rec["detail"] = _mask_ipv4_text(rec.get("detail"))
+    rec["php2shell_detail"] = _mask_ipv4_text(rec.get("php2shell_detail"))
     if rec.get("errors"):
         rec["errors"] = [_mask_ipv4_text(e) for e in rec["errors"]]
     for e in rec.get("evidence", []):
@@ -525,12 +531,17 @@ class Aggregate:
 
     def report(self, thresholds: dict, meta: dict) -> dict:
         with self.lock:
+            masked = meta.get("ip_masking", True)
+            note = ("Anonymized aggregate survey data; any host IPs are truncated to a /16 "
+                    "prefix (last two octets redacted). Safe to share with the community."
+                    if masked else
+                    "WARNING: --no-mask-ips was set — hosts_with_php_masked contains FULL "
+                    "host IP addresses. This report is NOT anonymized; do not share publicly.")
             return {
                 "tool": "php2shell-detect",
                 "tool_version": __version__,
                 "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                "note": "Anonymized aggregate survey data (no IP addresses retained). "
-                        "Safe to share with the community.",
+                "note": note,
                 "meta": meta,
                 "thresholds": thresholds,
                 "totals": {
@@ -1503,9 +1514,10 @@ def main(argv=None):
             print("error: --survey requires --contact <email|url> so admins can reach you and opt out.",
                   file=sys.stderr)
             return 2
-        if not (args.survey_report or args.jsonl or args.json_out):
-            print("error: --survey needs an output sink (--survey-report / --jsonl / --json) to be useful.",
-                  file=sys.stderr)
+        if not (args.survey_report or args.jsonl or args.json_out
+                or args.html or args.md or args.csv or args.xlsx):
+            print("error: --survey needs an output sink (--survey-report / --jsonl / --json / "
+                  "--html / --md / --csv / --xlsx) to be useful.", file=sys.stderr)
             return 2
     if args.contact:
         _UA = "php2shell-detect/%s (+authorized-security-testing; contact: %s)" % (__version__, args.contact)
@@ -1584,6 +1596,16 @@ def main(argv=None):
 
     mask_ips = survey and not args.no_mask_ips
 
+    # In streaming/survey mode we keep no full result list, but a batch report
+    # (--html/--md/--csv/--xlsx) needs per-host rows. Buffer only the hosts worth
+    # listing — PHP-positive or flagged — as slim, already-masked rows, capped so a
+    # large survey stays memory-bounded. on_result runs single-threaded, so no lock.
+    want_batch_report = bool(args.html or args.md or args.csv or args.xlsx)
+    buffer_rows = streaming and want_batch_report
+    report_rows: list[dict] = []
+    report_rows_cap = 100000
+    report_rows_truncated = [False]
+
     # Live progress on stderr (never stdout). Use a known total when we have one and
     # it is not internet-scale; an unbounded survey shows an indeterminate counter.
     progress_total = args.limit if (survey and args.limit) else total_hint
@@ -1598,6 +1620,11 @@ def main(argv=None):
         flagged = rec.get(status_key) in bad_states
         if flagged:
             found[0] += 1
+        if buffer_rows and (rec.get("is_php") or flagged):
+            if len(report_rows) < report_rows_cap:
+                report_rows.append(_slim_row(rec))  # rec already IP-masked above
+            else:
+                report_rows_truncated[0] = True
         if args.jsonl:
             print(json.dumps(rec, default=str))
             sys.stdout.flush()
@@ -1627,7 +1654,7 @@ def main(argv=None):
                 json.dump(records, fh, indent=2, default=str)
             if not args.jsonl:
                 print("Wrote JSON results to %s" % args.json_out)
-        if args.html or args.md:
+        if want_batch_report:
             norm_agg = Aggregate()
             for r in records:
                 norm_agg.add(r)
@@ -1649,12 +1676,19 @@ def main(argv=None):
             with open(args.survey_report, "w", encoding="utf-8") as fh:
                 json.dump(rep, fh, indent=2, default=str)
             if not args.jsonl:
-                print("Wrote anonymized survey report to %s (safe to share)." % args.survey_report)
-        if (args.html or args.md) and agg is not None:
+                if mask_ips:
+                    print("Wrote anonymized survey report to %s (safe to share)." % args.survey_report)
+                else:
+                    print("Wrote survey report to %s. WARNING: --no-mask-ips set — it contains "
+                          "FULL IPs and is NOT anonymized; do not share." % args.survey_report,
+                          file=sys.stderr)
+        if want_batch_report and agg is not None:
             meta = {"mode": "php2shell" if args.php2shell else "version",
                     "shard": "%d/%d" % (shard_id, shard_n), "seed": args.seed,
-                    "survey": True, "contact": args.contact}
-            write_reports(args, thresholds, meta, status_key, agg, [])
+                    "survey": True, "contact": args.contact,
+                    "ip_masked": mask_ips, "rows_cap": report_rows_cap,
+                    "rows_truncated": report_rows_truncated[0]}
+            write_reports(args, thresholds, meta, status_key, agg, report_rows)
 
     return 3 if found[0] else 0
 
@@ -1681,6 +1715,19 @@ def print_summary_streaming(agg, status_key, t0, workers):
 # HTML / Markdown reports
 # --------------------------------------------------------------------------- #
 
+_REPORT_ROW_FIELDS = ("target", "resolved_ip", "php_version", "status", "php2shell",
+                      "php_version_source", "php_version_granularity", "is_php",
+                      "distro", "proxy", "detail", "php2shell_detail")
+
+
+def _slim_row(rec):
+    """A display-only subset of a record for the HTML/MD/CSV/XLSX host table. In census
+    mode the record is already IP-masked upstream (mask_record), so this carries no full
+    IP. Drops heavy fields (evidence, headers) so buffering flagged/PHP-positive hosts
+    during a large survey stays memory-bounded."""
+    return {k: rec.get(k) for k in _REPORT_ROW_FIELDS}
+
+
 def build_report_model(thresholds, meta, status_key, agg, rows):
     rep = agg.report(thresholds, meta)
     rep["status_key"] = status_key
@@ -1703,6 +1750,17 @@ def render_markdown(rep) -> str:
     out.append("- Tool: php2shell-detect v%s" % rep["tool_version"])
     out.append("- Thresholds (safe minimum): " +
                ", ".join("%s≥%s" % (k, v) for k, v in rep["thresholds"]["safe_min"].items()))
+    meta = rep.get("meta") or {}
+    if meta.get("survey"):
+        if meta.get("ip_masked"):
+            out.append("- Survey mode: host IPs truncated to a /16 prefix (last two octets "
+                       "redacted, e.g. `203.0.x.x`) for safe sharing.")
+        else:
+            out.append("- **Warning:** `--no-mask-ips` set — full IPs included; **not** "
+                       "anonymized, do not share.")
+        if meta.get("rows_truncated"):
+            out.append("- Host list truncated to the first %s matching host(s); aggregate "
+                       "counts cover every scanned host." % meta.get("rows_cap"))
     out.append("")
     out.append("## Totals")
     out.append("")
@@ -1784,6 +1842,20 @@ def render_html(rep) -> str:
                                   for k, v in rep["by_branch"].items()))
     thr = ", ".join("%s&ge;%s" % (esc(k), esc(v)) for k, v in rep["thresholds"]["safe_min"].items())
 
+    meta = rep.get("meta") or {}
+    masknote = ""
+    if meta.get("survey"):
+        if meta.get("ip_masked"):
+            masknote = ("<br>Survey mode &mdash; host IPs truncated to a /16 network prefix "
+                        "(last two octets redacted, e.g. 203.0.x.x) for safe sharing.")
+        else:
+            masknote = ("<br><b>Warning:</b> <code>--no-mask-ips</code> set &mdash; full IP "
+                        "addresses are included; this report is <b>not</b> anonymized and must "
+                        "not be shared.")
+        if meta.get("rows_truncated"):
+            masknote += (" Host list truncated to the first %s matching host(s); aggregate "
+                         "counts above still cover every scanned host." % esc(meta.get("rows_cap")))
+
     return """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -1809,7 +1881,7 @@ def render_html(rep) -> str:
 </style></head><body>
 <h1>php2shell-detect &mdash; %(focus)s</h1>
 <p class="sub">Generated %(generated)s &middot; tool v%(ver)s &middot; safe thresholds: %(thr)s<br>
-Detection only &mdash; no exploitation performed.</p>
+Detection only &mdash; no exploitation performed.%(masknote)s</p>
 <div class="cards">
  <div class="card"><div class="n">%(scanned)d</div><div class="l">Scanned</div></div>
  <div class="card"><div class="n">%(reachable)d</div><div class="l">Reachable</div></div>
@@ -1831,6 +1903,7 @@ Detection only &mdash; no exploitation performed.</p>
         "proxy": t["behind_proxy_cdn"],
         "statuslabel": "PHP2Shell" if sk == "php2shell" else "Version",
         "tally": tally_rows(_rows_tally(rep, sk)), "branch": branch_section, "hosts": hosts_section,
+        "masknote": masknote,
     }
 
 

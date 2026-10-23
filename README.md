@@ -156,7 +156,8 @@ special-use ranges by default, shards, and rate-limits.
 
 ```bash
 # Scan one /16, 100 conns/sec, shard 0 of 16, PHP2Shell focus,
-# writing an anonymized aggregate report (no IPs) you can publish:
+# writing an anonymized aggregate JSON (no IPs) plus an HTML report whose
+# host table carries only /16-masked IPs — both safe to publish:
 python3 php2shell_detect.py 198.51.100.0/16 \
     --survey --php2shell \
     --contact "security@yourorg.example" \
@@ -181,19 +182,26 @@ even-strided permutation of the space — reproducible with `--seed` and good fo
 spreading load — not a uniform random draw.
 
 Survey mode **requires** `--contact` (advertised in the `User-Agent` so admins can reach
-you and opt out) and an output sink. Built-in exclusions cover RFC 1918/5735/6598/5737/
+you and opt out) and an output sink — any of `--survey-report`, `--jsonl`, `--json`,
+`--html`, `--md`, `--csv`, or `--xlsx`. Built-in exclusions cover RFC 1918/5735/6598/5737/
 3927 and multicast/reserved space; add your own opt-out list with `--exclude`.
 
 **IP masking (census privacy):** in survey mode the last two octets of every IP are
 masked (`203.0.113.45` → `203.0.x.x`) everywhere they could appear — `target`,
-`resolved_ip`, `final_url`, error strings and evidence text — in both the streamed
-output (`--jsonl`/`--json`) and the reports, and reverse-DNS names are dropped. So an
-individual host can't be identified from a shared census (only the owning `/16` is
-visible, which maps to an org via WHOIS — keep that in mind before publishing). The
-`--survey-report` JSON holds aggregate counts (status tally, branch distribution, top
-versions) **plus a list of masked IPs where PHP was found** (`hosts_with_php_masked`,
-with version and PHP2Shell status). Pass `--no-mask-ips` only for your own private data
-to keep full IPs.
+`resolved_ip`, `final_url`, the `proxy`/`Via` value, verdict `detail` text, error strings
+and evidence text — in both the streamed output (`--jsonl`/`--json`) and the
+`--html`/`--md`/`--csv`/`--xlsx` reports, and reverse-DNS names are dropped. (So even a
+server advertising an IP-shaped banner can't smuggle a full address into a shared report.) So an individual host can't be identified from a shared
+census (only the owning `/16` is visible, which maps to an org via WHOIS — keep that in
+mind before publishing). The `--survey-report` JSON is the strictest form: aggregate
+counts (status tally, branch distribution, top versions) **plus a list of masked IPs
+where PHP was found** (`hosts_with_php_masked`, with version and PHP2Shell status) — no
+full IPs at all. The `--html`/`--md`/`--csv`/`--xlsx` survey reports add the same
+aggregate **and** a per-host table of the PHP-positive/flagged hosts (with /16-masked
+IPs), capped at the first 100,000 matching hosts (the aggregate counts always cover the
+full scan); each report states its masking status in a header note. Pass `--no-mask-ips`
+only for your own private data to keep full IPs — the report then labels itself as not
+anonymized and not safe to share.
 
 > **Scan responsibly.** Keep `--rate` polite, spread work with `--shard`, honor opt-out
 > requests promptly, and only survey space you are authorized to probe.
@@ -203,10 +211,12 @@ to keep full IPs.
 Multiple formats can be written in one run; all are produced with the standard library
 only (no third-party dependency):
 
-- `--html FILE` — standalone styled HTML report (light/dark), summary + per-host table
-  (or aggregate in survey mode).
-- `--md FILE` — Markdown report.
-- `--csv FILE` — CSV (per-host rows; aggregate tables in survey mode).
+- `--html FILE` — standalone styled HTML report (light/dark), summary + per-host table.
+  In survey mode: the anonymized aggregate plus a table of PHP-positive/flagged hosts
+  with /16-masked IPs.
+- `--md FILE` — Markdown report (same survey behavior as HTML).
+- `--csv FILE` — CSV (per-host rows; in survey mode, aggregate sheets plus the masked
+  PHP-positive/flagged host rows).
 - `--xlsx FILE` — Excel workbook with `Summary`, `Status`, `Branches`, `Versions` and
   (per-host) `Hosts` sheets. Written directly as OOXML — opens in Excel/LibreOffice.
 - `--json FILE` — full JSON (array), all evidence per host.

@@ -3,6 +3,11 @@ __pycache__/
 *.egg-info/
 dist/
 build/
-# local scan outputs
+# local scan outputs — never commit these (may contain real IPs / scan data)
 *.report.json
 results.json
+# report files written by --html/--md/--csv/--xlsx and survey runs
+*.html
+*.csv
+*.xlsx
+*survey*.json

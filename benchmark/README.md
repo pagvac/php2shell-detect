@@ -66,6 +66,13 @@ deliberately — the method under test is the *only* version signal.
    summary reports the correct affected count.
 5. **Exit codes** — both default and `--php2shell` runs exit **3** when affected/vulnerable
    hosts are present (CI gating).
+6. **Survey-report masking (in-process, no Docker)** — `check_survey_report_masking()`
+   drives the census report path the way `main()` does (`mask_record` → `_slim_row` →
+   render) and asserts the HTML/MD/CSV survey report lists PHP-positive/flagged hosts as a
+   per-host table, that their IPs are shown only as a `/16` prefix (`203.0.x.x`), that **no
+   full four-octet host IP** appears in any report, and that `--no-mask-ips` labels the
+   report as *not* anonymized. Survey mode excludes loopback/reserved space so it cannot
+   reach the Docker fixtures, which is why this path is covered in-process.
 
 ## Extending the benchmark
 
@@ -77,6 +84,9 @@ deliberately — the method under test is the *only* version signal.
   `docker-compose.yml`, and an `EXPECTED` entry asserting `source` is the new method.
 - Keep assertions **robust to base-image updates**: assert the method and branch, and pin
   an exact patch only where the fixture itself sets it (banner/composer).
+- **Report/masking change** (new survey report format, new masked field, changed row
+  filter): update `check_survey_report_masking()` so it still proves no full IP can reach
+  a shareable report.
 
 > Run this benchmark and confirm **PASS** before pushing any commit (alongside the Semgrep
 > and gitleaks gates in [`../AGENTS.md`](../AGENTS.md)).
