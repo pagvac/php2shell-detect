@@ -2,6 +2,10 @@
   <img src="assets/logo.svg" alt="php2shell-detect" width="720">
 </p>
 
+<p align="center">
+  <a href="https://github.com/pagvac/php2shell-detect/actions/workflows/ci.yml"><img src="https://github.com/pagvac/php2shell-detect/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+</p>
+
 # php2shell-detect
 
 Multi-method remote **PHP version detector** with a headline **PHP2Shell triage mode**.
@@ -255,6 +259,11 @@ It stands up local PHP fixtures — one per detection method (`headers`, `phpinf
 and exit codes for each. Methodology and how to extend it are in
 [`benchmark/README.md`](benchmark/README.md). Running it (PASS) is **required before every
 push**, alongside the Semgrep and gitleaks gates (see [`AGENTS.md`](AGENTS.md)).
+
+**Continuous integration:** [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs the
+same gates on every push and PR — byte-compile + import across Python 3.8–3.13, `ruff`
+lint, Semgrep (0 MEDIUM+), gitleaks, and this Docker benchmark. (ruff is a dev/CI tool
+only; the core tool stays standard-library only.)
 
 ## Responsible & legal use
 

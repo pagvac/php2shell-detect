@@ -1,0 +1,14 @@
+# Lint configuration for php2shell-detect (dev/CI only — ruff is NOT a runtime
+# dependency; the core tool stays standard-library only).
+#
+# Scope is deliberately the high-signal correctness rules (pyflakes F + pycodestyle
+# E/W: undefined names, unused imports/vars, real syntax/logic errors) rather than the
+# opinionated style/refactor rules. This single-file tool intentionally uses
+# %-formatting and broad best-effort try/except for network robustness; flagging those
+# would be noise, not bugs.
+target-version = "py38"
+line-length = 100
+
+[lint]
+select = ["E", "F", "W"]
+ignore = ["E501"]  # long lines are tolerated here
