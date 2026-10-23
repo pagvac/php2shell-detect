@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.svg" alt="php2shell-detect" width="720">
+</p>
+
 # php2shell-detect
 
 Multi-method remote **PHP version detector** with a headline **PHP2Shell triage mode**.
@@ -67,6 +71,12 @@ python3 php2shell_detect.py 10.0.0.0/24 192.0.2.0/27 -f estate.txt \
 `--php2shell` switches the verdict column to **affected / patched / suspect / n-a** and
 makes the process exit **3** if any affected (or version-undisclosed "suspect") PHP host
 is found — handy for CI gating.
+
+Even **without** `--php2shell`, a version found to be PHP2Shell-vulnerable is never hidden:
+in the default view such hosts are prefixed **`PHP2Shell-vulnerable — …`** in the detail
+column (so an EOL branch like `7.4` is not silently reported as merely `eol`), and the
+summary adds a `⚠ PHP2Shell … N affected host(s)` line. Use `--php2shell` for the full
+triage column and the dedicated exit code.
 
 Example output:
 
@@ -152,6 +162,20 @@ python3 php2shell_detect.py 198.51.100.0/16 \
     --html php2shell_survey.html --yes
 ```
 
+```bash
+# Sample the whole routable internet but stop after 1000 hosts (--limit),
+# at a polite 50 conns/sec, with an anonymized aggregate report:
+python3 php2shell_detect.py 0.0.0.0/0 \
+    --survey --php2shell \
+    --contact "security@yourorg.example" \
+    --rate 50 --limit 1000 \
+    --survey-report php2shell_survey_1000.json --yes
+```
+
+`--limit N` caps the survey at N hosts (after exclusions). Ordering is a seeded,
+even-strided permutation of the space — reproducible with `--seed` and good for
+spreading load — not a uniform random draw.
+
 Survey mode **requires** `--contact` (advertised in the `User-Agent` so admins can reach
 you and opt out) and an output sink. Built-in exclusions cover RFC 1918/5735/6598/5737/
 3927 and multicast/reserved space; add your own opt-out list with `--exclude`.
@@ -200,6 +224,7 @@ python3 php2shell_detect.py 10.0.0.0/24 --php2shell --yes \
 | `--deep` | probe full phpinfo/exposed-file paths + legacy easter-egg GUID |
 | `--no-active` | baseline `GET /` only, no extra path probing |
 | `--no-favicon` | skip favicon hashing |
+| `--no-progress` | disable the live progress bar (shown on stderr while scanning) |
 | `--shodan-key KEY` | passive Shodan enrichment (or `SHODAN_API_KEY` env) |
 | `--targets-from FILE` | stream targets (memory-light, for big lists) |
 | `--survey` + `--contact` | internet-survey mode (see above) |
@@ -210,6 +235,26 @@ python3 php2shell_detect.py 10.0.0.0/24 --php2shell --yes \
 | `--yes` | acknowledge authorization (required non-interactively) |
 
 Exit codes: **0** clean, **3** at least one vulnerable/affected host, **1/2** aborted/usage.
+
+A live **progress bar** is shown on stderr while scanning (it uses `tqdm` if that common
+module is installed, otherwise a dependency-free fallback; off a TTY it emits periodic
+log lines). It never touches stdout, so `--jsonl` and report output are unaffected. Pass
+`--no-progress` to turn it off.
+
+## Benchmark
+
+A reproducible, Docker-based benchmark proves the detector still works across **multiple
+detection methods** (not just the version banner) before any change ships:
+
+```bash
+python3 benchmark/run_benchmark.py     # build fixtures, scan, assert, tear down (0 = PASS)
+```
+
+It stands up local PHP fixtures — one per detection method (`headers`, `phpinfo`,
+`exposed`, `dummyphp`, `cms`, presence) — and asserts the winning method, version, verdict
+and exit codes for each. Methodology and how to extend it are in
+[`benchmark/README.md`](benchmark/README.md). Running it (PASS) is **required before every
+push**, alongside the Semgrep and gitleaks gates (see [`AGENTS.md`](AGENTS.md)).
 
 ## Responsible & legal use
 
@@ -225,6 +270,7 @@ must be clean).
 - `php2shell_detect.py` — the tool (single file, stdlib only).
 - `thresholds.json` — editable safe-version table (with the PHP2Shell CVE metadata).
 - `AGENTS.md` — contributor/agent security requirements.
+- `benchmark/` — Docker-based multi-method regression benchmark (pre-push gate).
 - `Dockerfile` — optional container image.
 - `pyproject.toml` — optional pipx/uv packaging.
 - `LICENSE` — MIT.

@@ -1,0 +1,47 @@
+# Benchmark fixtures for php2shell-detect.
+#
+# One image (built once), many services — each exercising a DIFFERENT detection method
+# across the PHP2Shell verdict matrix, so the benchmark covers version banners *and*
+# phpinfo, exposed composer.json, dummy-.php routing, CMS fingerprints, and
+# presence-only hosts. All bind to 127.0.0.1 only. See run_benchmark.py for the
+# expected verdict/method per port.
+services:
+  # --- method: headers (X-Powered-By banner) — exact version boundary cases ---
+  vuln-83:          # 8.3.35  supported branch below the fix -> affected / vulnerable
+    build: .
+    environment: { BENCH_PROFILE: banner, FAKE_PHP_VERSION: "8.3.35" }
+    ports: ["127.0.0.1:18131:8080"]
+  patched-83:       # 8.3.36  supported branch at the fix     -> patched / ok
+    build: .
+    environment: { BENCH_PROFILE: banner, FAKE_PHP_VERSION: "8.3.36" }
+    ports: ["127.0.0.1:18132:8080"]
+  eol-74:           # 7.4.33  EOL branch                      -> affected / eol
+    build: .
+    environment: { BENCH_PROFILE: banner, FAKE_PHP_VERSION: "7.4.33" }
+    ports: ["127.0.0.1:18133:8080"]
+  patched-84:       # 8.4.27  newer branch at the fix         -> patched / ok
+    build: .
+    environment: { BENCH_PROFILE: banner, FAKE_PHP_VERSION: "8.4.27" }
+    ports: ["127.0.0.1:18134:8080"]
+
+  # --- other detection methods (no usable banner) ---
+  suspect:          # PHPSESSID only, version hidden          -> presence (suspect)
+    build: .
+    environment: { BENCH_PROFILE: suspect }
+    ports: ["127.0.0.1:18135:8080"]
+  phpinfo:          # real phpinfo() page                     -> method "phpinfo"
+    build: .
+    environment: { BENCH_PROFILE: phpinfo }
+    ports: ["127.0.0.1:18136:8080"]
+  dummyphp:         # static /, missing *.php routed to PHP   -> method "dummyphp"
+    build: .
+    environment: { BENCH_PROFILE: dummyphp }
+    ports: ["127.0.0.1:18137:8080"]
+  composer:         # exposed composer.json require.php=8.3.35 -> method "exposed"
+    build: .
+    environment: { BENCH_PROFILE: composer, FAKE_PHP_VERSION: "8.3.35" }
+    ports: ["127.0.0.1:18138:8080"]
+  cms:              # WordPress generator -> PHP>=7.2 floor    -> method "cms"
+    build: .
+    environment: { BENCH_PROFILE: cms }
+    ports: ["127.0.0.1:18139:8080"]

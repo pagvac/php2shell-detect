@@ -1189,6 +1189,12 @@ def _finalize(rec: dict, thresholds: dict) -> None:
     p2_st, p2_detail = php2shell_status(rec, thresholds)
     rec["php2shell"] = p2_st
     rec["php2shell_detail"] = p2_detail
+    # Surface PHP2Shell exposure in the default (non --php2shell) outputs too, so a
+    # vulnerable version is never silently reported as merely 'eol'/'vulnerable'
+    # without naming the exposure. In --php2shell mode the dedicated php2shell_detail
+    # column is shown instead, so this prefix only affects the version-mode view.
+    if p2_st == "affected":
+        rec["detail"] = "PHP2Shell-vulnerable — " + rec["detail"]
 
 
 # --------------------------------------------------------------------------- #
@@ -1238,6 +1244,11 @@ def print_summary(records, status_key="status"):
         if k not in order:
             parts.append("%s=%d" % (k, v))
     print("\nSummary: %d host(s) | %s" % (len(records), ", ".join(parts)))
+    if status_key != "php2shell":
+        affected = sum(1 for r in records if r.get("php2shell") == "affected")
+        if affected:
+            print("⚠ PHP2Shell (%s): %d affected host(s) — run with --php2shell "
+                  "for the full triage view." % (PHP2SHELL_CVES, affected))
 
 
 # --------------------------------------------------------------------------- #
@@ -1280,6 +1291,8 @@ def parse_args(argv):
     p.add_argument("--only-vuln", action="store_true",
                    help="show only vulnerable/affected hosts in the table")
     p.add_argument("--no-color", action="store_true", help="disable ANSI colors")
+    p.add_argument("--no-progress", action="store_true",
+                   help="disable the live progress bar (shown on stderr while scanning)")
     p.add_argument("--yes", action="store_true", help="acknowledge authorization and skip the confirmation prompt")
 
     g2 = p.add_argument_group("PHP2Shell (CVE-2026-109618/CVE-2026-109619)")
@@ -1369,6 +1382,97 @@ def _safe_scan(h, args, thresholds):
                 "detail": "scan error: %s" % e, "php2shell_detail": "scan error",
                 "php_version": None, "resolved_ip": None, "php_version_source": None,
                 "is_php": False, "reachable": False, "evidence": []}
+
+
+class Progress:
+    """Live scan progress on stderr. Uses tqdm when it is installed (a common,
+    optional module) and otherwise a dependency-free stdlib bar. On a TTY it draws
+    an updating bar; off a TTY (piped/log) it emits an occasional newline-terminated
+    status line so long runs still leave a trail. Never touches stdout, so report
+    and --jsonl output are unaffected."""
+
+    def __init__(self, total, enabled=True, stream=None):
+        self.total = int(total) if total and total > 0 else 0
+        self.n = 0
+        self.flagged = 0
+        self.stream = stream or sys.stderr
+        self.enabled = bool(enabled)
+        self.t0 = time.monotonic()
+        self._last = 0.0
+        self._tty = False
+        self._tqdm = None
+        if not self.enabled:
+            return
+        try:
+            self._tty = self.stream.isatty()
+        except Exception:
+            self._tty = False
+        if self._tty:
+            try:
+                from tqdm import tqdm  # optional; falls back to the stdlib bar below
+                self._tqdm = tqdm(total=self.total or None, unit="host",
+                                  dynamic_ncols=True, leave=False, file=self.stream)
+            except Exception:
+                self._tqdm = None
+
+    def update(self, flagged=False):
+        self.n += 1
+        if flagged:
+            self.flagged += 1
+        if not self.enabled:
+            return
+        if self._tqdm is not None:
+            self._tqdm.update(1)
+            if self.flagged:
+                self._tqdm.set_postfix_str("flagged=%d" % self.flagged, refresh=False)
+            return
+        now = time.monotonic()
+        if self._tty:
+            # throttle redraws; always draw the final tick of a known total
+            if now - self._last < 0.2 and not (self.total and self.n >= self.total):
+                return
+            self._last = now
+            self._write(self._bar(now) + "\r", flush=True)
+        else:
+            if (self.n % 2000) and (now - self._last) < 30.0:
+                return
+            self._last = now
+            self._write(self._bar(now) + "\n", flush=True)
+
+    def _bar(self, now):
+        elapsed = now - self.t0
+        rate = self.n / elapsed if elapsed > 0 else 0.0
+        if self.total:
+            frac = min(1.0, self.n / self.total)
+            width = 28
+            filled = int(frac * width)
+            return "  [%s] %d/%d %3.0f%%  %.0f/s  flagged=%d  %.0fs" % (
+                "#" * filled + "-" * (width - filled), self.n, self.total,
+                frac * 100.0, rate, self.flagged, elapsed)
+        return "  scanned=%d  flagged=%d  %.0f/s  %.0fs" % (
+            self.n, self.flagged, rate, elapsed)
+
+    def _write(self, text, flush=False):
+        try:
+            self.stream.write(text)
+            if flush:
+                self.stream.flush()
+        except Exception:
+            pass
+
+    def close(self):
+        if not self.enabled:
+            return
+        if self._tqdm is not None:
+            try:
+                self._tqdm.close()
+            except Exception:
+                pass
+            return
+        if self.n:
+            # leave a final, newline-terminated summary of the bar
+            self._write("\r" + self._bar(time.monotonic()) + "\n" if self._tty
+                        else self._bar(time.monotonic()) + "\n", flush=True)
 
 
 def main(argv=None):
@@ -1480,11 +1584,19 @@ def main(argv=None):
 
     mask_ips = survey and not args.no_mask_ips
 
+    # Live progress on stderr (never stdout). Use a known total when we have one and
+    # it is not internet-scale; an unbounded survey shows an indeterminate counter.
+    progress_total = args.limit if (survey and args.limit) else total_hint
+    if progress_total and progress_total > 10_000_000:
+        progress_total = 0
+    progress = Progress(progress_total, enabled=not args.no_progress)
+
     def on_result(rec):
         seen[0] += 1
         if mask_ips:
             mask_record(rec)
-        if rec.get(status_key) in bad_states:
+        flagged = rec.get(status_key) in bad_states
+        if flagged:
             found[0] += 1
         if args.jsonl:
             print(json.dumps(rec, default=str))
@@ -1494,17 +1606,12 @@ def main(argv=None):
             if json_fh:
                 json_fh.write(("" if first_json[0] else ",\n") + json.dumps(rec, default=str))
                 first_json[0] = False
-            # periodic progress to stderr for long surveys
-            if seen[0] % 1000 == 0:
-                sys.stderr.write("\r  scanned=%d affected=%d elapsed=%.0fs" %
-                                 (seen[0], found[0], time.time() - t0))
-                sys.stderr.flush()
         else:
             records.append(rec)
+        progress.update(flagged=flagged)
 
     run_bounded(host_source, args.workers, lambda h: _safe_scan(h, args, thresholds), on_result)
-    if agg is not None and seen[0] >= 1000:
-        sys.stderr.write("\n")
+    progress.close()
 
     # --- output ---
     if not streaming:
@@ -1563,6 +1670,11 @@ def print_summary_streaming(agg, status_key, t0, workers):
     if top_branch:
         print("Top branches: " + ", ".join("%s=%d" % kv for kv in top_branch))
     print("%s tally: " % label + ", ".join("%s=%d" % kv for kv in sorted(rep_counts.items(), key=lambda x: -x[1])))
+    if status_key != "php2shell":
+        affected = agg.by_php2shell.get("affected", 0)
+        if affected:
+            print("⚠ PHP2Shell (%s): %d affected host(s) — run with --php2shell "
+                  "for the full triage view." % (PHP2SHELL_CVES, affected))
 
 
 # --------------------------------------------------------------------------- #
