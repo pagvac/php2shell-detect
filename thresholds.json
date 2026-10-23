@@ -1,0 +1,12 @@
+{
+  "_comment": "Minimum SAFE patch release per PHP minor branch. A host is flagged 'vulnerable' when its detected PHP is BELOW the value for its branch. These releases (8.2.35/8.3.36/8.4.27/8.5.12) were published 2026-10-21 to fix CVE-2026-109618 and CVE-2026-109619 (both CVSS v4 9.2, unauthenticated RCE; exploited in the wild). PHP ships new patch releases roughly monthly, so keep this file current from https://www.php.net/supported-versions.php . Branches below 'eol_below' are treated as end-of-life (always flagged); note PHP 8.2 itself reaches EOL on 2026-12-31.",
+  "_cves": ["CVE-2026-109618", "CVE-2026-109619"],
+  "_released": "2026-10-21",
+  "safe_min": {
+    "8.2": "8.2.35",
+    "8.3": "8.3.36",
+    "8.4": "8.4.27",
+    "8.5": "8.5.12"
+  },
+  "eol_below": "8.2"
+}

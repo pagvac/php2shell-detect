@@ -1,0 +1,41 @@
+# Optional packaging for php2shell-detect.
+# The tool is a single standard-library Python file and can be run directly
+# (`python3 php2shell_detect.py ...`) with no install. This file is a convenience
+# for users who want `pipx install .` / `uvx` and a `php2shell-detect` command.
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "php2shell-detect"
+version = "1.1.0"
+description = "Multi-method remote PHP version detector & PHP2Shell (CVE-2026-109618/CVE-2026-109619) vulnerability triage"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+authors = [{ name = "Adrian Pastor" }]
+keywords = ["php", "security", "scanner", "cve", "version-detection", "php2shell"]
+classifiers = [
+    "Environment :: Console",
+    "Intended Audience :: Information Technology",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Security",
+]
+
+# No required dependencies (standard library only). `packaging` is an optional
+# enhancement with a built-in fallback.
+dependencies = []
+
+[project.optional-dependencies]
+enhanced = ["packaging>=21.0"]
+
+# Add your repository URL here when published:
+# [project.urls]
+# Homepage = "https://github.com/<you>/php2shell-detect"
+
+[project.scripts]
+php2shell-detect = "php2shell_detect:main"
+
+[tool.setuptools]
+py-modules = ["php2shell_detect"]
